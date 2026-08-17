@@ -1,19 +1,63 @@
 language: node_js
 node_js:
-  - "0.6"
-  - "0.8"
   - "0.10"
   - "1.8"
   - "2.5"
   - "3.3"
   - "4.4"
   - "5.11"
-  - "6.2"
+  - "6"
+dist: xenial
 sudo: false
 cache:
   directories:
     - node_modules
+matrix:
+  include:
+    # Node 0.6 and 0.8 ship an npm that can only negotiate TLS 1.0, which no
+    # registry accepts any more, and nvm has no prebuilt Node 0.6 binary for
+    # linux-x64. Both legacy legs therefore install the dependency tree with
+    # Node 0.10's npm and run the whole suite with the legacy runtime itself:
+    # 0.8.28 from the official tarball, 0.6.21 compiled from source.
+    - node_js: "0.10"
+      env: SEAL_LEGACY_NODE=0.8.28
+    - node_js: "0.10"
+      env: SEAL_LEGACY_NODE=0.6.21
+      addons:
+        apt:
+          packages:
+            - gcc-4.8
+            - g++-4.8
+            - python2.7
 before_install:
+  # Resolve devDependencies against the release-era registry snapshot
+  - "npm config set registry https://:2016-05-27T04%3A32%3A39.156Z@time-machines-npm.sealsecurity.io/"
+
+  # Provide the legacy runtime this leg runs its tests on
+  - |
+    if [ "$SEAL_LEGACY_NODE" = "0.8.28" ]; then
+      curl -sSL https://nodejs.org/dist/v0.8.28/node-v0.8.28-linux-x64.tar.gz | tar -xz -C "$HOME"
+      export SEAL_LEGACY_BIN="$HOME/node-v0.8.28-linux-x64/bin"
+      "$SEAL_LEGACY_BIN/node" --version
+    fi
+  - |
+    if [ "$SEAL_LEGACY_NODE" = "0.6.21" ]; then
+      mkdir -p "$HOME/py2"
+      ln -sf /usr/bin/python2.7 "$HOME/py2/python"
+      export PATH="$HOME/py2:$PATH"
+      curl -sSL https://nodejs.org/dist/v0.6.21/node-v0.6.21.tar.gz | tar -xz -C /tmp
+      cd /tmp/node-v0.6.21
+      # The redirect keeps V8's -Wnarrowing spam from blowing Travis's 4MB log
+      # limit, which terminates the job; failures still surface via tail
+      export CC=gcc-4.8 CXX=g++-4.8
+      ./configure --prefix="$HOME/node06" --without-ssl > /tmp/node06.log 2>&1 || { tail -60 /tmp/node06.log; exit 1; }
+      make -j2 >> /tmp/node06.log 2>&1 || { tail -60 /tmp/node06.log; exit 1; }
+      make install >> /tmp/node06.log 2>&1 || { tail -60 /tmp/node06.log; exit 1; }
+      cd "$TRAVIS_BUILD_DIR"
+      export SEAL_LEGACY_BIN="$HOME/node06/bin"
+      "$SEAL_LEGACY_BIN/node" --version
+    fi
+
   # Setup Node.js version-specific dependencies
   - "test $TRAVIS_NODE_VERSION != '0.6' || npm rm --save-dev istanbul"
   - "test $TRAVIS_NODE_VERSION != '0.8' || npm rm --save-dev istanbul"
@@ -22,8 +66,12 @@ before_install:
   - "test ! -d node_modules || npm prune"
   - "test ! -d node_modules || npm rebuild"
 script:
-  # Run test script, depending on istanbul install
-  - "test ! -z $(npm -ps ls istanbul) || npm test"
-  - "test   -z $(npm -ps ls istanbul) || npm run-script test-ci"
-after_script:
-  - "test -e ./coverage/lcov.info && npm install coveralls@2 && cat ./coverage/lcov.info | coveralls"
+  # Legacy legs run the full mocha suite on the legacy runtime; the rest run the
+  # project's own test script, depending on istanbul install
+  - |
+    if [ -n "$SEAL_LEGACY_BIN" ]; then
+      "$SEAL_LEGACY_BIN/node" node_modules/mocha/bin/_mocha --reporter spec --check-leaks test/
+    else
+      test ! -z $(npm -ps ls istanbul) || npm test
+      test   -z $(npm -ps ls istanbul) || npm run-script test-ci
+    fi
