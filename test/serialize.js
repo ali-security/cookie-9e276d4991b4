@@ -11,6 +11,12 @@ test('basic', function() {
     assert.equal('foo=', cookie.serialize('foo', ''));
     assert.throws(cookie.serialize.bind(cookie, 'foo\n', 'bar'), /argument name is invalid/);
     assert.throws(cookie.serialize.bind(cookie, 'foo\u280a', 'bar'), /argument name is invalid/);
+    assert.equal('foo/bar=baz', cookie.serialize('foo/bar', 'baz'));
+    assert.equal('foo@bar=baz', cookie.serialize('foo@bar', 'baz'));
+    assert.equal('foo:bar=baz', cookie.serialize('foo:bar', 'baz'));
+    assert.throws(cookie.serialize.bind(cookie, 'foo bar', 'bar'), /argument name is invalid/);
+    assert.throws(cookie.serialize.bind(cookie, 'foo;bar', 'bar'), /argument name is invalid/);
+    assert.throws(cookie.serialize.bind(cookie, 'foo=bar', 'bar'), /argument name is invalid/);
     assert.throws(cookie.serialize.bind(cookie, 'foo', 'bar', {encode: 42}), /option encode is invalid/);
 });
 
@@ -19,9 +25,22 @@ test('path', function() {
         path: '/'
     }));
 
-    assert.throws(cookie.serialize.bind(cookie, 'foo', 'bar', {
-        path: '/\n'
-    }), /option path is invalid/);
+    assert.equal('foo=bar; Path=/some/path', cookie.serialize('foo', 'bar', {
+        path: '/some/path'
+    }));
+
+    var invalidPaths = [
+        '/\n',
+        '/some/path' + String.fromCharCode(0),
+        '/some;path',
+        '/some<path'
+    ];
+
+    for (var i = 0; i < invalidPaths.length; i++) {
+        assert.throws(cookie.serialize.bind(cookie, 'foo', 'bar', {
+            path: invalidPaths[i]
+        }), /option path is invalid/);
+    }
 });
 
 test('secure', function() {
@@ -39,9 +58,36 @@ test('domain', function() {
         domain: 'example.com'
     }));
 
-    assert.throws(cookie.serialize.bind(cookie, 'foo', 'bar', {
-        domain: 'example.com\n'
-    }), /option domain is invalid/);
+    var validDomains = [
+        'example.com',
+        'sub.example.com',
+        'sub.example-site.com',
+        '.example.com',
+        'my-site.org',
+        'localhost',
+        '.localhost'
+    ];
+
+    for (var i = 0; i < validDomains.length; i++) {
+        assert.equal('foo=bar; Domain=' + validDomains[i], cookie.serialize('foo', 'bar', {
+            domain: validDomains[i]
+        }));
+    }
+
+    var invalidDomains = [
+        'example.com\n',
+        'sub.example.com' + String.fromCharCode(0),
+        'my site.org',
+        'domain..com',
+        'example.com; Path=/',
+        'example.com /* inject a comment */'
+    ];
+
+    for (var j = 0; j < invalidDomains.length; j++) {
+        assert.throws(cookie.serialize.bind(cookie, 'foo', 'bar', {
+            domain: invalidDomains[j]
+        }), /option domain is invalid/);
+    }
 });
 
 test('httpOnly', function() {
@@ -140,11 +186,31 @@ test('parse->serialize', function() {
 });
 
 test('unencoded', function() {
-    assert.deepEqual('cat=+ ', cookie.serialize('cat', '+ ', {
+    assert.deepEqual('cat=+', cookie.serialize('cat', '+', {
+        encode: function(value) { return value; }
+    }));
+
+    assert.deepEqual('cat=foo,bar', cookie.serialize('cat', 'foo,bar', {
+        encode: function(value) { return value; }
+    }));
+
+    assert.deepEqual('cat=foo\\bar', cookie.serialize('cat', 'foo\\bar', {
         encode: function(value) { return value; }
     }));
 
     assert.throws(cookie.serialize.bind(cookie, 'cat', '+ \n', {
+        encode: function(value) { return value; }
+    }), /argument val is invalid/);
+
+    assert.throws(cookie.serialize.bind(cookie, 'cat', 'foo bar', {
+        encode: function(value) { return value; }
+    }), /argument val is invalid/);
+
+    assert.throws(cookie.serialize.bind(cookie, 'cat', 'bar; Domain=evil.example.com', {
+        encode: function(value) { return value; }
+    }), /argument val is invalid/);
+
+    assert.throws(cookie.serialize.bind(cookie, 'cat', 'bar; Path=/; HttpOnly', {
         encode: function(value) { return value; }
     }), /argument val is invalid/);
 })
